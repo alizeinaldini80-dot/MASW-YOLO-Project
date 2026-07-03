@@ -1,112 +1,65 @@
 """
-MASW-YOLO Training Script.
+src/train.py
 
-Main entry point for training the full MASW-YOLO model (MSCA backbone +
-AFPN neck + WiseIoU loss + Soft-NMS).
+اسکریپت یکپارچه آموزش برای همه آزمایش‌های پروژه MASW-YOLO.
 
-Usage:
-    python train.py --config configs/base_config.yaml
+نحوه اجرا (حتماً از ریشه پروژه، نه از داخل src/):
+    python -m src.train --config configs/exp1_msca.yaml
 """
 
 import argparse
-import os
-import sys
-
 import yaml
+from ultralytics import YOLO
 
-# Add project root to path so local imports work
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from src.custom_trainer import MASWTrainer
-
-
-def load_config(config_path: str) -> dict:
-    """
-    Load a YAML configuration file.
-
-    Args:
-        config_path (str): Path to the YAML configuration file.
-
-    Returns:
-        dict: Configuration dictionary.
-    """
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-    return config
+# import نسبی: این خط باعث اجرای src/models/__init__.py می‌شود
+# که ماژول‌های سفارشی (MSCA) را در Ultralytics ثبت می‌کند
+from . import models  # noqa: F401
 
 
-def train_model(config_path: str) -> None:
-    """
-    Train the MASW-YOLO model.
-
-    Loads hyperparameters from the YAML config and passes them as overrides
-    to the MASWTrainer. The trainer handles:
-        - Custom model building (MASWDetectionModel with MSCA / AFPN layers)
-        - WiseIoU loss for bounding-box regression
-        - Soft-NMS during validation
-
-    Args:
-        config_path (str): Path to the training configuration file.
-    """
-    config = load_config(config_path)
-
-    # Prepare overrides dict for the trainer
-    overrides = {
-        "model": os.path.join(
-            os.path.dirname(__file__), "models", config.get("model", "yolov8n.yaml")
-        ),
-        "data": config.get("data", "data/dataset.yaml"),
-        "epochs": config.get("epochs", 100),
-        "batch": config.get("batch", 16),
-        "imgsz": config.get("imgsz", 640),
-        "lr0": config.get("lr0", 0.01),
-        "lrf": config.get("lrf", 0.01),
-        "momentum": config.get("momentum", 0.937),
-        "weight_decay": config.get("weight_decay", 0.0005),
-        "warmup_epochs": config.get("warmup_epochs", 3.0),
-        "warmup_momentum": config.get("warmup_momentum", 0.8),
-        "warmup_bias_lr": config.get("warmup_bias_lr", 0.1),
-        "optimizer": config.get("optimizer", "SGD"),
-        "device": config.get("device", 0),
-        "workers": config.get("workers", 8),
-        "box": config.get("box", 7.5),
-        "cls": config.get("cls", 0.5),
-        "dfl": config.get("dfl", 1.5),
-        "project": config.get("project", "runs/train"),
-        "name": config.get("name", "MASW-YOLO"),
-        "exist_ok": True,
-        # Wise-IoU parameters
-        "wiou_version": config.get("wiou_version", "v3"),
-        "wiou_beta": config.get("wiou_beta", 1.0),
-        "wiou_delta": config.get("wiou_delta", 0.5),
-        # Soft-NMS parameters
-        "soft_sigma": config.get("soft_sigma", 0.5),
-        "soft_score_thr": config.get("soft_score_thr", 0.001),
-    }
-
-    print(f"Starting MASW-YOLO training with config: {config_path}")
-    print(f"Model: {overrides['model']}")
-    print(f"Epochs: {overrides['epochs']} | Batch: {overrides['batch']} | ImgSz: {overrides['imgsz']}")
-
-    # Instantiate the MASW trainer and start training
-    trainer = MASWTrainer(overrides=overrides)
-    trainer.train()
-
-    print(f"Training completed. Results saved to: {trainer.save_dir}")
+def load_config(exp_config_path):
+    with open('configs/base_config.yaml', 'r') as f:
+        cfg = yaml.safe_load(f)
+    with open(exp_config_path, 'r') as f:
+        exp_cfg = yaml.safe_load(f)
+    cfg.update(exp_cfg)
+    return cfg
 
 
 def main():
-    """Parse command-line arguments and launch training."""
-    parser = argparse.ArgumentParser(description="Train MASW-YOLO model")
-    parser.add_argument(
-        "--config",
-        type=str,
-        default="configs/base_config.yaml",
-        help="Path to training configuration file",
-    )
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', type=str, required=True,
+                         help='مسیر فایل کانفیگ آزمایش، مثال: configs/exp1_msca.yaml')
     args = parser.parse_args()
 
-    train_model(args.config)
+    cfg = load_config(args.config)
+
+    if 'model_yaml' in cfg:
+        model = YOLO(cfg['model_yaml'])
+        model.load(cfg['weights'])
+        print(f"مدل با معماری سفارشی ساخته شد: {cfg['model_yaml']}")
+    else:
+        model = YOLO(cfg['weights'])
+        print(f"مدل مستقیم از وزن‌های آماده بارگذاری شد: {cfg['weights']}")
+
+    results = model.train(
+        data=cfg['data'],
+        epochs=cfg['epochs'],
+        batch=cfg['batch'],
+        imgsz=cfg['imgsz'],
+        lr0=cfg['lr0'],
+        lrf=cfg['lrf'],
+        momentum=cfg['momentum'],
+        weight_decay=cfg['weight_decay'],
+        device=cfg['device'],
+        workers=cfg['workers'],
+        project=cfg['project'],
+        name=cfg['name'],
+        exist_ok=cfg['exist_ok'],
+        verbose=cfg['verbose'],
+    )
+
+    print(f"✅ آموزش '{cfg['name']}' با موفقیت به پایان رسید!")
+    print(f"وزن‌های نهایی: {results.save_dir}/weights/best.pt")
 
 
 if __name__ == "__main__":
