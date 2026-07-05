@@ -1,14 +1,28 @@
 # data/dataset.yaml
 #
-# پیکربندی دیتاست VisDrone2019 برای استفاده در Google Colab
-# دیتاست از قبل در فرمت YOLO (images/ + labels/ با پوشه‌های train/val/test) در Google Drive آماده شده است
+# پیکربندی دیتاست VisDrone2019
 #
-# پیش‌نیاز: قبل از اجرای train.py، در Colab این خط باید اجرا شده باشد:
+# دو حالت مسیر در ادامه آمده؛ همیشه فقط یکی از دو خط «path» باید فعال (بدون #) باشد.
+
+# ------------------------------------------------------------------
+# حالت ۱) اجرای لوکال / سروری که دیتاست مستقیم روی دیسک آن قرار دارد
+# (این خط را با مسیر واقعی روی سیستم خودت جایگزین/فعال کن)
+# path: D:/Projects/MASW-YOLO-PROJECT/dataset/VisDrone
+# ------------------------------------------------------------------
+
+# ------------------------------------------------------------------
+# حالت ۲) اجرا در Google Colab
+# چون خواندن مستقیم از Google Drive کند است، دیتاست ابتدا از Drive به
+# فضای اجرای (runtime) خودِ کولب کپی/اکسترکت می‌شود (مثلاً /content/VisDrone)
+# و train.py از همین مسیر محلی کولب می‌خواند، نه از /content/drive/...
+#
+# پیش‌نیاز (در نوت‌بوک، قبل از اجرای train.py):
 #   from google.colab import drive
 #   drive.mount('/content/drive')
-
-# مسیر ریشه دیتاست (دقیقاً مطابق ساختار واقعی شما در Google Drive)
-path: /content/drive/MyDrive/VisDrone_Project/dataset/VisDrone
+#   !cp /content/drive/MyDrive/VisDrone_Project/dataset/VisDrone.zip /content/
+#   !unzip -q /content/VisDrone.zip -d /content/
+# ------------------------------------------------------------------
+path: /content/VisDrone
 
 # مسیرهای تصاویر (نسبت به path) - Ultralytics به‌صورت خودکار "images" را در مسیر
 # به "labels" تبدیل می‌کند تا فایل‌های annotation متناظر را پیدا کند
