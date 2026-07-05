@@ -1,6 +1,6 @@
 # src/models/modules/__init__.py
-from .modules.msca import MSCA
-from .modules.afpn import ASFF2, ASFF3, BasicBlock
+from .msca import MSCA
+from .afpn import ASFF2, ASFF3, BasicBlock
 import ultralytics.nn.tasks as tasks
 
 tasks.MSCA = MSCA
