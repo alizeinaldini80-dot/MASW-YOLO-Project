@@ -18,9 +18,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ultralytics.utils.loss import BboxLoss
-from ultralytics.utils.ops import bbox2dist, xywh2xyxy
 
-
+from ultralytics.utils.ops import xywh2xyxy
+from ultralytics.utils.tal import bbox2dist
 # ---------------------------------------------------------------------------
 # Wise-IoU helpers
 # ---------------------------------------------------------------------------
