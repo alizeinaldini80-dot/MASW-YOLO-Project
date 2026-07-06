@@ -1,0 +1,14 @@
+# configs/exp4_softnms.yaml
+#
+# مرحله جداگانه: فقط Soft-NMS روی baseline (بدون MSCA، بدون AFPN).
+# Soft-NMS روی معماری مدل اثر نمی‌گذارد (فقط در post-processing حین
+# validation/predict اعمال می‌شود)، پس اینجا از همان وزن‌های baseline
+# (weights: yolov8n.pt) استفاده می‌کنیم، نه یک model_yaml سفارشی.
+
+name: exp4_softnms
+weights: yolov8n.pt
+
+soft_nms: true
+soft_nms_method: gaussian   # gaussian | linear | hard (hard = معادل NMS معمولی، برای تست/مقایسه)
+soft_nms_sigma: 0.5          # فقط برای gaussian
+soft_nms_score_thres: 0.001  # آستانه نهایی حذف بعد از کاهش امتیاز
