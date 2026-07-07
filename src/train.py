@@ -15,6 +15,7 @@ from ultralytics import YOLO
 # که ماژول‌های سفارشی (MSCA) را در Ultralytics ثبت می‌کند
 from . import models  # noqa: F401
 from .utils.nms import enable_soft_nms
+from .utils.loss import enable_wiou
 
 def load_config(exp_config_path):
     with open('configs/base_config.yaml', 'r') as f:
@@ -32,9 +33,6 @@ def main():
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    from .utils.nms import enable_soft_nms
-from .utils.loss import enable_wiou
-
 # داخل main()، بعد از cfg = load_config(args.config)
     if cfg.get('soft_nms', False):
         enable_soft_nms(
