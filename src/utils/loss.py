@@ -32,120 +32,86 @@ ultralytics.utils.loss.BboxLoss کپی شده (فقط بخش محاسبهٔ iou/
 و با این فایل مقایسه کنید.
 """
 
-
 import math
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from ultralytics.utils.loss import BboxLoss
-
 from ultralytics.utils.ops import xywh2xyxy
 from ultralytics.utils.tal import bbox2dist
-import ultralytics.utils.loss as _ultra_loss
-from ultralytics.utils import LOGGER
 
 
-def wiou_v3(
-    pred_bboxes: torch.Tensor,
-    target_bboxes: torch.Tensor,
-    iou_mean: torch.Tensor,
-    momentum: float = 0.9999,
-    delta: float = 3.0,
-    alpha: float = 1.9,
-    eps: float = 1e-7,
-):
-    """
-    محاسبهٔ IoU معمولی و Loss نسخهٔ WIoU-v3، طبق فرمول‌های (اصلی) مقالهٔ
-    Wise-IoU: Bounding Box Regression Loss with Dynamic Focusing Mechanism.
-
-    Args:
-        pred_bboxes, target_bboxes (Tensor[N,4]): مختصات xyxy
-        iou_mean (Tensor scalar, buffer): میانگین متحرک L_IoU کل آموزش
-            (برای محاسبهٔ β و r؛ در جا [in-place] به‌روزرسانی می‌شود)
-        momentum: ضریب میانگین متحرک (نزدیک به ۱ یعنی به‌کندی به‌روز می‌شود)
-        delta, alpha: هایپرپارامترهای مکانیزم تمرکز غیریکنواخت WIoU-v3
-        eps: برای پایداری عددی
-
-    Returns:
-        iou (Tensor[N]): IoU خام (فقط برای لاگ/دیباگ، بدون گرادیان)
-        loss (Tensor[N]): مقدار Loss نهایی WIoU-v3 برای هر باکس (با گرادیان)
-    """
-    b1_x1, b1_y1, b1_x2, b1_y2 = pred_bboxes.unbind(-1)
-    b2_x1, b2_y1, b2_x2, b2_y2 = target_bboxes.unbind(-1)
-
-    # اشتراک و اجتماع
-    inter = (torch.min(b1_x2, b2_x2) - torch.max(b1_x1, b2_x1)).clamp(0) * (
-        torch.min(b1_y2, b2_y2) - torch.max(b1_y1, b2_y1)
-    ).clamp(0)
-    w1, h1 = (b1_x2 - b1_x1), (b1_y2 - b1_y1)
-    w2, h2 = (b2_x2 - b2_x1), (b2_y2 - b2_y1)
-    union = w1 * h1 + w2 * h2 - inter + eps
-    iou = inter / union
-
-    # قطر باکس محیطی (enclosing box) - طبق مقاله WIoU از گرادیان جدا می‌شود
-    # تا از کند شدن همگرایی توسط این جمله جلوگیری شود
-    cw = torch.max(b1_x2, b2_x2) - torch.min(b1_x1, b2_x1)
-    ch = torch.max(b1_y2, b2_y2) - torch.min(b1_y1, b2_y1)
-    c2 = (cw.pow(2) + ch.pow(2)).detach() + eps
-
-    # فاصلهٔ مرکز دو باکس
-    center_dist2 = ((b1_x1 + b1_x2 - b2_x1 - b2_x2).pow(2) + (b1_y1 + b1_y2 - b2_y1 - b2_y2).pow(2)) / 4
-
-    r_wiou = torch.exp(center_dist2 / c2)  # جریمهٔ فاصله (WIoU-v1)
-    l_iou = 1.0 - iou
-    l_wiou_v1 = r_wiou * l_iou
-
-    # به‌روزرسانی میانگین متحرک L_IoU (بدون گرادیان) برای محاسبهٔ β
-    with torch.no_grad():
-        if l_iou.numel() > 0:
-            batch_mean = l_iou.mean()
-            iou_mean.mul_(momentum).add_(batch_mean * (1.0 - momentum))
-
-    # درجهٔ پرت‌بودن (outlier degree) و ضریب تمرکز غیریکنواخت r (بدون گرادیان)
-    beta = (l_iou.detach() / (iou_mean + eps)).clamp(min=0.0)
-    r = beta / (delta * torch.pow(torch.as_tensor(alpha, device=beta.device, dtype=beta.dtype), beta - delta))
-
-    loss = r.detach() * l_wiou_v1
-    return iou.detach(), loss
+def _box_xyxy_to_cxcywh(boxes):
+    x1, y1, x2, y2 = boxes.unbind(dim=-1)
+    cx = (x1 + x2) / 2
+    cy = (y1 + y2) / 2
+    w = x2 - x1
+    h = y2 - y1
+    return torch.stack([cx, cy, w, h], dim=-1)
 
 
-class WIoUBboxLoss(nn.Module):
-    """
-    جایگزین BboxLoss اصلی Ultralytics؛ همان ورودی/خروجی را دارد (تا
-    v8DetectionLoss بدون تغییر با آن کار کند)، فقط IoU loss را با
-    WIoU-v3 به‌جای CIoU محاسبه می‌کند. DFL loss دقیقاً مثل نسخهٔ اصلی است.
-    """
+def _iou(boxes1, boxes2):
+    inter_x1 = torch.max(boxes1[..., 0], boxes2[..., 0])
+    inter_y1 = torch.max(boxes1[..., 1], boxes2[..., 1])
+    inter_x2 = torch.min(boxes1[..., 2], boxes2[..., 2])
+    inter_y2 = torch.min(boxes1[..., 3], boxes2[..., 3])
+    inter_w = (inter_x2 - inter_x1).clamp(min=0)
+    inter_h = (inter_y2 - inter_y1).clamp(min=0)
+    inter_area = inter_w * inter_h
+    area1 = (boxes1[..., 2] - boxes1[..., 0]) * (boxes1[..., 3] - boxes1[..., 1])
+    area2 = (boxes2[..., 2] - boxes2[..., 0]) * (boxes2[..., 3] - boxes2[..., 1])
+    union = area1 + area2 - inter_area
+    return inter_area / (union + 1e-7)
 
-    def __init__(self, reg_max: int = 16, wiou_delta: float = 3.0, wiou_alpha: float = 1.9,
-                 wiou_momentum: float = 0.9999):
-        super().__init__()
-        self.dfl_loss = _ultra_loss.DFLoss(reg_max) if reg_max > 1 else None
-        self.wiou_delta = wiou_delta
-        self.wiou_alpha = wiou_alpha
-        self.wiou_momentum = wiou_momentum
-        self.register_buffer("iou_mean", torch.tensor(1.0))
+
+def _center_distance(boxes1, boxes2):
+    c1 = _box_xyxy_to_cxcywh(boxes1)
+    c2 = _box_xyxy_to_cxcywh(boxes2)
+    return (c1[..., :2] - c2[..., :2]).pow(2).sum(dim=-1).sqrt()
+
+
+def wise_iou(boxes1, boxes2, version="v3", beta=1.0, delta=0.5):
+    iou = _iou(boxes1, boxes2)
+    loss_iou = 1.0 - iou
+    if version == "v1":
+        return loss_iou.unsqueeze(-1)
+    c_dist = _center_distance(boxes1, boxes2)
+    enclose_x1 = torch.min(boxes1[..., 0], boxes2[..., 0])
+    enclose_y1 = torch.min(boxes1[..., 1], boxes2[..., 1])
+    enclose_x2 = torch.max(boxes1[..., 2], boxes2[..., 2])
+    enclose_y2 = torch.max(boxes1[..., 3], boxes2[..., 3])
+    enclose_diag = torch.sqrt((enclose_x2 - enclose_x1) ** 2 + (enclose_y2 - enclose_y1) ** 2).clamp(min=1e-7)
+    r_wiou = torch.exp((c_dist ** 2) / (enclose_diag ** 2))
+    if version == "v3":
+        with torch.no_grad():
+            loss_mean = loss_iou.mean().detach()
+            loss_std = loss_iou.std().detach() + 1e-7
+            alpha = (loss_iou - loss_mean) / loss_std
+            r = beta / (delta * alpha.clamp(min=1e-7) ** (delta - beta) + 1e-7)
+            r = r.clamp(max=10.0)
+        loss = r * r_wiou * loss_iou
+        return loss.unsqueeze(-1)
+    raise ValueError(f"Unknown WIoU version: {version}")
+
+
+class WiseIoULoss(BboxLoss):
+    def __init__(self, reg_max=16, version="v3", beta=1.0, delta=0.5):
+        super().__init__(reg_max)
+        self.version = version
+        self.beta = beta
+        self.delta = delta
 
     def forward(self, pred_dist, pred_bboxes, anchor_points, target_bboxes, target_scores,
                 target_scores_sum, fg_mask, imgsz, stride):
-        """محاسبهٔ WIoU-v3 loss و DFL loss (ساختار عیناً مطابق BboxLoss اصلی)."""
         weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
-
-        # ==== تنها تفاوت اصلی نسبت به BboxLoss اصلی Ultralytics ====
-        _, wiou = wiou_v3(
-            pred_bboxes[fg_mask], target_bboxes[fg_mask], self.iou_mean,
-            momentum=self.wiou_momentum, delta=self.wiou_delta, alpha=self.wiou_alpha,
-        )
-        loss_iou = (wiou.unsqueeze(-1) * weight).sum() / target_scores_sum
-        # ==============================================================
-
+        iou = wise_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], version=self.version, beta=self.beta, delta=self.delta)
+        loss_iou = (iou * weight).sum() / target_scores_sum
         if self.dfl_loss:
             target_ltrb = bbox2dist(anchor_points, target_bboxes, self.dfl_loss.reg_max - 1)
             loss_dfl = self.dfl_loss(pred_dist[fg_mask].view(-1, self.dfl_loss.reg_max), target_ltrb[fg_mask]) * weight
             loss_dfl = loss_dfl.sum() / target_scores_sum
         else:
-            import torch.nn.functional as F
             target_ltrb = bbox2dist(anchor_points, target_bboxes)
             target_ltrb = target_ltrb * stride
             target_ltrb[..., 0::2] /= imgsz[1]
@@ -153,30 +119,41 @@ class WIoUBboxLoss(nn.Module):
             pred_dist = pred_dist * stride
             pred_dist[..., 0::2] /= imgsz[1]
             pred_dist[..., 1::2] /= imgsz[0]
-            loss_dfl = (
-                F.l1_loss(pred_dist[fg_mask], target_ltrb[fg_mask], reduction="none").mean(-1, keepdim=True) * weight
-            )
+            loss_dfl = (F.l1_loss(pred_dist[fg_mask], target_ltrb[fg_mask], reduction="none").mean(-1, keepdim=True) * weight)
             loss_dfl = loss_dfl.sum() / target_scores_sum
-
         return loss_iou, loss_dfl
 
+# ---------------------------------------------------------------------------
+# فعال‌سازی سراسری (Monkey-patch) — برای استفاده در ablation از طریق کانفیگ
+# ---------------------------------------------------------------------------
 
-def enable_wiou(delta: float = 3.0, alpha: float = 1.9, momentum: float = 0.9999):
+import ultralytics.utils.loss as _ultra_loss
+from ultralytics.utils import LOGGER
+
+
+def enable_wiou(version: str = "v3", beta: float = 1.0, delta: float = 0.5):
     """
-    فعال‌سازی سراسری WIoU-v3: کلاس ultralytics.utils.loss.BboxLoss را با
-    WIoUBboxLoss جایگزین می‌کند. چون v8DetectionLoss.__init__ نام
-    `BboxLoss` را در زمان فراخوانی (نه زمان import) از namespace همین
-    ماژول resolve می‌کند، این patch باید فقط قبل از اولین فراخوانی
-    model.train()/model.val() (یعنی قبل از ساخته‌شدن criterion) اجرا شود.
+    فعال‌سازی سراسری WiseIoULoss: کلاس ultralytics.utils.loss.BboxLoss را با
+    WiseIoULoss جایگزین می‌کند. چون v8DetectionLoss.__init__ نام `BboxLoss`
+    را در زمان فراخوانی (نه زمان import) از namespace همین ماژول resolve
+    می‌کند، این patch باید فقط قبل از اولین فراخوانی model.train()/model.val()
+    (یعنی قبل از ساخته‌شدن criterion) اجرا شود.
+
+    نحوه استفاده (در configs/exp*.yaml):
+        wiou: true
+        wiou_version: v3
+        wiou_beta: 1.0
+        wiou_delta: 0.5
     """
-    def _factory(reg_max=16, *args, **kwargs):
-        return WIoUBboxLoss(reg_max, wiou_delta=delta, wiou_alpha=alpha, wiou_momentum=momentum)
+    def _factory(reg_max: int = 16, *args, **kwargs):
+        return WiseIoULoss(reg_max, version=version, beta=beta, delta=delta)
 
     _ultra_loss.BboxLoss = _factory
-    LOGGER.info(f"✅ WIoU-v3 فعال شد (delta={delta}, alpha={alpha}, momentum={momentum})")
+    LOGGER.info(f"✅ WiseIoU ({version}) فعال شد (beta={beta}, delta={delta})")
 
 
 def disable_wiou():
     """بازگرداندن CIoU/BboxLoss استاندارد Ultralytics (در صورت نیاز به مقایسه در همان اجرا)."""
     import importlib
     importlib.reload(_ultra_loss)
+    LOGGER.info("↩️ BboxLoss استاندارد Ultralytics بازگردانده شد.")tra_loss)
