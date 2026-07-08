@@ -4,34 +4,31 @@ src/utils/nms.py
 پیاده‌سازی Soft-NMS (Bodla et al., 2017) به‌عنوان جایگزین NMS سخت
 (hard-NMS) استاندارد، طبق بخش مربوطه در مقاله MASW-YOLO.
 
-تفاوت با NMS معمولی:
-    NMS سخت باکس‌های هم‌پوشان با IoU بالاتر از آستانه را کاملاً حذف
-    می‌کند (امتیاز = صفر). این کار در صحنه‌های شلوغ مثل VisDrone
-    (اشیای کوچک و چگال مثل عابر پیاده/موتور) باعث حذف اشتباهِ
-    تشخیص‌های درست هم‌پوشان می‌شود.
-    Soft-NMS به‌جای حذف کامل، امتیاز باکس‌های هم‌پوشان را متناسب با
-    میزان IoU کاهش می‌دهد (decay) و فقط در انتها باکس‌هایی که امتیازشان
-    از آستانه پایین‌تر رفته حذف می‌شوند.
+نسخهٔ بهینه‌شده (v2):
+    نسخهٔ اول یک حلقهٔ پایتونی بود که برای هر باکس، جداگانه IoU با
+    باقیمانده‌ها را محاسبه می‌کرد. در validation با conf_thres پایین
+    (۰.۰۰۱ طبق تنظیمات پیش‌فرض Ultralytics)، هزاران باکس کاندید قبل از
+    NMS زنده می‌مانند و این حلقه به‌خاطر overhead هر فراخوانی جدا روی
+    GPU به‌شدت کند می‌شود (چند ده ثانیه به‌ازای هر تصویر).
 
-این ماژول دو بخش دارد:
-    1) soft_nms(...)            : هستهٔ الگوریتم (وکتوریزه، روی GPU/CPU)
-    2) enable_soft_nms(...)     : monkey-patch سراسری که تابع
-       ultralytics.utils.nms.non_max_suppression را با نسخه‌ای که در
-       داخل از soft_nms استفاده می‌کند جایگزین می‌کند.
+    راه‌حل: ماتریس IoU بین همهٔ جفت‌باکس‌ها فقط یک‌بار محاسبه می‌شود
+    (N×N)، و حلقهٔ سرکوب فقط از این ماتریس ایندکس می‌خواند (بدون
+    فراخوانی box_iou جدید در هر تکرار). علاوه‌بر این، برای این‌که ماتریس
+    N×N از نظر حافظه منفجر نشود (۳۰٬۰۰۰ باکس یعنی ماتریسی با ۹۰۰ میلیون
+    عضو!)، قبل از Soft-NMS فقط بالاترین soft_nms_max_boxes امتیاز
+    نگه‌داشته می‌شود (پیش‌فرض ۱۰۰۰؛ باکس‌های خارج از این محدوده عملاً در
+    NMS سخت هم شانسی برای زنده‌ماندن نداشتند).
 
-نحوهٔ استفاده (برای آزمایش مستقل Soft-NMS روی baseline، بدون MSCA/AFPN):
+استفاده:
     from src.utils.nms import enable_soft_nms
     enable_soft_nms(method="gaussian", sigma=0.5, score_thres=0.001)
-    # از این‌جا به بعد، هر train/val/predict که ultralytics انجام بدهد
-    # (چه در حین آموزش، چه validate جداگانه) به‌طور خودکار از Soft-NMS
-    # به‌جای NMS سخت استفاده می‌کند.
 
-⚠️ نکتهٔ نسخه: پیاده‌سازی non_max_suppression_soft در این فایل، عیناً بر
-اساس ساختار تابع اصلی ultralytics.utils.nms.non_max_suppression (نسخهٔ
-نصب‌شده هنگام نوشتن این کد) است. اگر بعد از آپدیت نسخه در کولب خطای
-غیرمنتظره گرفتید، این را اجرا و با این فایل مقایسه کنید:
+⚠️ نکتهٔ نسخه: ساختار non_max_suppression_soft عیناً بر اساس
+ultralytics.utils.nms.non_max_suppression (نسخهٔ نصب‌شده هنگام نوشتن این
+کد) است. اگر بعد از آپدیت نسخه در کولب خطای غیرمنتظره گرفتید:
     import inspect, ultralytics.utils.nms as n
     print(inspect.getsource(n.non_max_suppression))
+و با این فایل مقایسه کنید.
 """
 
 import time
@@ -42,61 +39,64 @@ from ultralytics.utils import LOGGER
 from ultralytics.utils.metrics import box_iou
 from ultralytics.utils.ops import xywh2xyxy
 
-# مرجع تابع اصلی (برای مسیر rotated/OBB که Soft-NMS برایش پیاده نشده)
 import ultralytics.utils.nms as _ultra_nms
 
 
-def soft_nms_optimized(boxes: torch.Tensor, scores: torch.Tensor, iou_thres: float = 0.5,
-                       sigma: float = 0.5, score_thres: float = 0.001, method: str = "gaussian"):
+def soft_nms(boxes: torch.Tensor, scores: torch.Tensor, iou_thres: float = 0.5,
+             sigma: float = 0.5, score_thres: float = 0.001, method: str = "gaussian",
+             max_boxes: int = 1000):
     """
-    نسخه بهینه‌شده Soft-NMS با استفاده از عملیات ماتریسی و کاهش محاسبات تکراری.
-    
-    بهبودها:
-    1. محاسبه یکباره IoU برای همه جفت‌ها (به جای محاسبه مکرر)
-    2. استفاده از عملیات برداری (vectorized) به جای حلقه‌های تودرتو
-    3. کاهش تعداد کپی‌های غیرضروری
-    4. خروجی دقیقاً مشابه نسخه قبلی
+    هستهٔ الگوریتم Soft-NMS — نسخهٔ وکتوریزه (ماتریس IoU فقط یک‌بار محاسبه می‌شود).
+
+    Args:
+        boxes (Tensor[N,4]): مختصات xyxy
+        scores (Tensor[N]): امتیاز اطمینان هر باکس
+        iou_thres (float): آستانهٔ IoU (فقط برای method='linear' یا 'hard')
+        sigma (float): پارامتر واریانس گاووسی (فقط برای method='gaussian')
+        score_thres (float): آستانهٔ نهایی حذف باکس‌های امتیاز-کاهش‌یافته
+        method (str): 'gaussian' | 'linear' | 'hard'
+        max_boxes (int): حداکثر تعداد باکس ورودی به الگوریتم (برای کنترل
+            حافظه/زمان ماتریس N×N؛ باکس‌های کم‌امتیازتر از این سقف از قبل
+            حذف می‌شوند، دقیقاً مثل رفتار NMS سخت روی long-tail کم‌امتیاز)
+
+    Returns:
+        Tensor[K]: اندیس باکس‌های نگه‌داشته‌شده (نسبت به boxes/scores ورودی)
     """
-    if boxes.shape[0] == 0:
+    n = boxes.shape[0]
+    if n == 0:
         return torch.zeros((0,), dtype=torch.long, device=boxes.device)
-    
+
     device = boxes.device
-    N = boxes.shape[0]
-    
-    # مرتب‌سازی بر اساس امتیاز (یک بار در ابتدا)
-    sorted_indices = torch.argsort(scores, descending=True)
-    boxes_sorted = boxes[sorted_indices]
-    scores_sorted = scores[sorted_indices]
-    
-    keep = []
-    
-    # محاسبه ماتریس IoU یک بار برای همه باکس‌ها
-    # این کار جایگزین محاسبات تکراری box_iou در هر تکرار می‌شود
-    all_ious = box_iou(boxes_sorted, boxes_sorted)  # [N, N]
-    
-    # ماسک برای باکس‌های فعال (حذف نشده)
-    active_mask = torch.ones(N, dtype=torch.bool, device=device)
-    
-    for i in range(N):
-        if not active_mask[i]:
-            continue
-            
-        # باکس فعلی را نگه دار
-        keep.append(sorted_indices[i].item())
-        
-        if i == N - 1:
+
+    # پیش‌غربالگری برای کنترل اندازهٔ ماتریس IoU
+    if n > max_boxes:
+        top = torch.argsort(scores, descending=True)[:max_boxes]
+        work_boxes = boxes[top]
+        work_scores = scores[top].clone()
+    else:
+        top = torch.arange(n, device=device)
+        work_boxes = boxes
+        work_scores = scores.clone()
+
+    m = work_boxes.shape[0]
+    iou_mat = box_iou(work_boxes, work_boxes)  # فقط یک‌بار محاسبه می‌شود (m×m)
+
+    active = torch.ones(m, dtype=torch.bool, device=device)
+    keep_local = []
+
+    neg_inf = torch.finfo(work_scores.dtype).min
+
+    for _ in range(m):
+        masked = torch.where(active, work_scores, torch.full_like(work_scores, neg_inf))
+        i = int(torch.argmax(masked))
+        if work_scores[i] <= score_thres or not active[i]:
             break
-        
-        # پیدا کردن باکس‌های فعال باقیمانده
-        active_indices = torch.where(active_mask[i+1:])[0] + i + 1
-        
-        if len(active_indices) == 0:
+        keep_local.append(i)
+        active[i] = False
+        if not active.any():
             break
-        
-        # محاسبه IoU با باکس فعلی (از ماتریس پیش‌محاسبه شده)
-        ious = all_ious[i, active_indices]
-        
-        # محاسبه decay
+
+        ious = iou_mat[i]
         if method == "linear":
             decay = torch.where(ious > iou_thres, 1.0 - ious, torch.ones_like(ious))
         elif method == "gaussian":
@@ -105,19 +105,15 @@ def soft_nms_optimized(boxes: torch.Tensor, scores: torch.Tensor, iou_thres: flo
             decay = torch.where(ious > iou_thres, torch.zeros_like(ious), torch.ones_like(ious))
         else:
             raise ValueError(f"روش نامعتبر برای Soft-NMS: {method}")
-        
-        # به‌روزرسانی امتیازها (فقط برای باکس‌های فعال)
-        scores_sorted[active_indices] = scores_sorted[active_indices] * decay
-        
-        # غیرفعال کردن باکس‌هایی که امتیازشان از آستانه پایین‌تر رفته
-        below_threshold = scores_sorted[active_indices] <= score_thres
-        active_mask[active_indices[below_threshold]] = False
-    
-    return torch.tensor(keep, dtype=torch.long, device=device)
 
+        work_scores = torch.where(active, work_scores * decay, work_scores)
+        active &= work_scores > score_thres
 
-# نسخه قبلی را با نسخه بهینه‌شده جایگزین می‌کنیم
-soft_nms = soft_nms_optimized
+    if not keep_local:
+        return torch.zeros((0,), dtype=torch.long, device=device)
+
+    keep_local_t = torch.tensor(keep_local, dtype=torch.long, device=device)
+    return top[keep_local_t]
 
 
 def non_max_suppression_soft(
@@ -130,7 +126,7 @@ def non_max_suppression_soft(
     labels=(),
     max_det: int = 300,
     nc: int = 0,
-    max_time_img: float = 0.9,
+    max_time_img: float = 0.05,
     max_nms: int = 30000,
     max_wh: int = 7680,
     rotated: bool = False,
@@ -140,19 +136,13 @@ def non_max_suppression_soft(
     soft_nms_method: str = "gaussian",
     soft_nms_sigma: float = 0.5,
     soft_nms_score_thres: float = 0.001,
+    soft_nms_max_boxes: int = 1000,
 ):
-    """
-    نسخهٔ Soft-NMS تابع non_max_suppression؛ همان امضا و رفتار نسخهٔ اصلی
-    Ultralytics را دارد (تا با val.py / predict.py سازگار باشد)، فقط
-    مرحلهٔ سرکوب سخت (torchvision.ops.nms / TorchNMS.nms) با soft_nms
-    جایگزین شده. برای OBB/rotated که Soft-NMS پیاده نشده، مسیر اصلی
-    ultralytics به‌عنوان fallback فراخوانی می‌شود.
-    """
+    """نسخهٔ Soft-NMS تابع non_max_suppression؛ همان امضا/رفتار نسخهٔ اصلی Ultralytics."""
     assert 0 <= conf_thres <= 1, f"Invalid Confidence threshold {conf_thres}"
     assert 0 <= iou_thres <= 1, f"Invalid IoU {iou_thres}"
 
     if rotated:
-        # Soft-NMS برای OBB پیاده نشده؛ به پیاده‌سازی اصلی واگذار می‌شود
         return _ultra_nms.non_max_suppression(
             prediction, conf_thres, iou_thres, classes, agnostic, multi_label,
             labels, max_det, nc, max_time_img, max_nms, max_wh, rotated, end2end, return_idxs,
@@ -235,12 +225,13 @@ def non_max_suppression_soft(
         scores = x[:, 4]
         boxes = x[:, :4] + c
 
-        # ==== استفاده از Soft-NMS بهینه‌شده ====
+        # ==== تنها تفاوت اصلی نسبت به تابع اصلی Ultralytics ====
         i = soft_nms(
             boxes, scores, iou_thres=iou_thres,
             sigma=soft_nms_sigma, score_thres=soft_nms_score_thres, method=soft_nms_method,
+            max_boxes=soft_nms_max_boxes,
         )
-        # =====================================
+        # =========================================================
 
         i = i[:max_det]
 
@@ -254,27 +245,22 @@ def non_max_suppression_soft(
     return (output, keepi) if return_idxs else output
 
 
-def enable_soft_nms(method: str = "gaussian", sigma: float = 0.5, score_thres: float = 0.001):
-    """
-    Soft-NMS را به‌صورت سراسری فعال می‌کند: تابع
-    ultralytics.utils.nms.non_max_suppression را monkey-patch می‌کند تا
-    val.py و predict.py (که هر دو `nms.non_max_suppression(...)` را در
-    زمان فراخوانی از ماژول resolve می‌کنند) به‌طور خودکار از این تابع
-    استفاده کنند. تنظیمات method/sigma/score_thres به‌صورت closure بسته
-    می‌شوند تا امضای تابع دقیقاً با نسخهٔ اصلی سازگار بماند.
-    """
+def enable_soft_nms(method: str = "gaussian", sigma: float = 0.5, score_thres: float = 0.001,
+                     max_boxes: int = 1000):
+    """Soft-NMS را به‌صورت سراسری فعال می‌کند (monkey-patch روی ultralytics.utils.nms.non_max_suppression)."""
     def _patched(*args, **kwargs):
         kwargs.setdefault("soft_nms_method", method)
         kwargs.setdefault("soft_nms_sigma", sigma)
         kwargs.setdefault("soft_nms_score_thres", score_thres)
+        kwargs.setdefault("soft_nms_max_boxes", max_boxes)
         return non_max_suppression_soft(*args, **kwargs)
 
     _ultra_nms.non_max_suppression = _patched
-    LOGGER.info(f"✅ Soft-NMS فعال شد (method={method}, sigma={sigma}, score_thres={score_thres})")
+    LOGGER.info(f"✅ Soft-NMS فعال شد (method={method}, sigma={sigma}, score_thres={score_thres}, max_boxes={max_boxes})")
 
 
 def disable_soft_nms():
-    """بازگرداندن NMS استاندارد Ultralytics (در صورت نیاز به مقایسه در همان اجرا)."""
+    """بازگرداندن NMS استاندارد Ultralytics."""
     import importlib
     importlib.reload(_ultra_nms)
     LOGGER.info("↩️ NMS استاندارد Ultralytics بازگردانده شد.")
