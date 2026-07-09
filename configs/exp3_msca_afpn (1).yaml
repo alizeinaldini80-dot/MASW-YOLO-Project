@@ -1,0 +1,8 @@
+# configs/exp3_msca_afpn.yaml
+#
+# مرحله ۲: ترکیب MSCA + AFPN.
+# نتیجه با exp0 (baseline) و exp2 (فقط AFPN) مقایسه می‌شود.
+
+name: exp3_msca_afpn
+model_yaml: src/models/masw-yolo-afpn.yaml
+weights: yolov8n.pt
