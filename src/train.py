@@ -102,6 +102,7 @@ def main():
             epochs=cfg['epochs'],
             batch=cfg['batch'],
             imgsz=cfg['imgsz'],
+            optimizer=cfg.get('optimizer', 'SGD'),
             lr0=cfg['lr0'],
             lrf=cfg['lrf'],
             momentum=cfg['momentum'],
