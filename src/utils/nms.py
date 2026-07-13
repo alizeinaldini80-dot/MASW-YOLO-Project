@@ -63,7 +63,7 @@ def soft_nms(
     score_thres: float = 0.001,
     method: str = "gaussian",
     max_boxes: int = 300,
-) -> torch.Tensor:
+):
     """
     Soft-NMS core, following the Fig. 4 flowchart:
     rank by confidence -> take the top box -> deposit into D -> compute IoU
@@ -83,11 +83,17 @@ def soft_nms(
             survived plain NMS either.
 
     Returns:
-        LongTensor of kept indices, relative to the input boxes/scores.
+        (keep_idx, keep_scores):
+            keep_idx: LongTensor of kept indices, relative to the input boxes/scores.
+            keep_scores: FloatTensor of each kept box's *decayed* Soft-NMS score
+                (the "si" that must be used for downstream ranking/mAP -- NOT the
+                original input score). This is what makes it Soft-NMS rather than
+                hard-NMS: a duplicate box is kept but demoted, not deleted.
     """
     n = boxes.shape[0]
     if n == 0:
-        return torch.zeros((0,), dtype=torch.long, device=boxes.device)
+        return (torch.zeros((0,), dtype=torch.long, device=boxes.device),
+                torch.zeros((0,), dtype=boxes.dtype, device=boxes.device))
 
     device = boxes.device
 
@@ -117,6 +123,7 @@ def soft_nms(
 
     active = np.ones(m, dtype=bool)
     keep_local = []
+    keep_scores_local = []
 
     for _ in range(m):
         remaining = np.where(active)[0]
@@ -127,6 +134,11 @@ def soft_nms(
             break
 
         keep_local.append(int(i))
+        # Record the score AT THE MOMENT OF SELECTION -- this already reflects
+        # any decay this box received from higher-ranked boxes selected in
+        # earlier iterations. This is the value that must be reported downstream,
+        # not the box's original pre-decay confidence.
+        keep_scores_local.append(float(scores_np[i]))
         active[i] = False
         if not active.any():
             break
@@ -145,10 +157,12 @@ def soft_nms(
         active &= scores_np > score_thres
 
     if not keep_local:
-        return torch.zeros((0,), dtype=torch.long, device=device)
+        return (torch.zeros((0,), dtype=torch.long, device=device),
+                torch.zeros((0,), dtype=boxes.dtype, device=device))
 
     keep_local_t = torch.tensor(keep_local, dtype=torch.long, device=device)
-    return top[keep_local_t]
+    keep_scores_t = torch.tensor(keep_scores_local, dtype=boxes.dtype, device=device)
+    return top[keep_local_t], keep_scores_t
 
 
 # --------------------------------------------------------------------------- #
@@ -268,7 +282,7 @@ def non_max_suppression_soft(
         boxes = x[:, :4] + c
 
         # ==== the only real difference vs. the Ultralytics original ====
-        i = soft_nms(
+        i, decayed_scores = soft_nms(
             boxes, scores, iou_thres=iou_thres,
             sigma=soft_nms_sigma, score_thres=soft_nms_score_thres, method=soft_nms_method,
             max_boxes=soft_nms_max_boxes,
@@ -276,8 +290,19 @@ def non_max_suppression_soft(
         # =================================================================
 
         i = i[:max_det]
+        decayed_scores = decayed_scores[:max_det]
 
-        output[xi] = x[i]
+        # IMPORTANT: use the *decayed* Soft-NMS score, not the box's original
+        # confidence. This is what actually makes it Soft-NMS: a duplicate box
+        # that overlapped a higher-ranked detection was kept, but demoted, not
+        # deleted -- if we reported its original score here it would rank as a
+        # high-confidence false positive during mAP evaluation and silently
+        # wreck precision (this was a real bug caught via a training run:
+        # P/mAP collapsed below the plain-NMS baseline while recall looked
+        # normal -- the signature of duplicate boxes ranking too high).
+        kept = x[i].clone()
+        kept[:, 4] = decayed_scores
+        output[xi] = kept
         if return_idxs:
             keepi[xi] = xk[i].view(-1)
         if (time.time() - t) > time_limit:
