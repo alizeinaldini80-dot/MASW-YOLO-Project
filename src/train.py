@@ -25,8 +25,8 @@ from ultralytics import YOLO
 from . import models  # noqa: F401
 
 from .utils.nms import enable_soft_nms
-from .utils.loss import enable_wiou
 
+from .utils.wiou import enable_wiou
 
 def load_config(exp_config_path):
     with open('configs/base_config.yaml', 'r') as f:
@@ -68,12 +68,11 @@ def main():
         )
 
     if cfg.get('wiou', False):
-        enable_wiou(
-            version=cfg.get('wiou_version', 'v3'),
-            beta=cfg.get('wiou_beta', 1.0),
-            delta=cfg.get('wiou_delta', 0.5),
-        )
-
+    enable_wiou(
+        alpha=cfg.get('wiou_alpha', 1.9),
+        delta=cfg.get('wiou_delta', 3.0),
+        momentum=cfg.get('wiou_momentum', 0.9999),
+    )
     # ---- تشخیص چک‌پوینت قبلی برای همین آزمایش (برای Resume) ----
     checkpoint_path = os.path.join(cfg['project'], cfg['name'], 'weights', 'last.pt')
     resume = os.path.exists(checkpoint_path)
