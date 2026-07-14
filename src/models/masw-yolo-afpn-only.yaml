@@ -1,12 +1,23 @@
 # masw-yolo-afpn-only.yaml
 #
-# مرحله ۱: فقط AFPN روی baseline، بدون MSCA.
-# طبق طراحی اصلی AFPN (Yang et al.)، کانال در تمام سطوح پیرامید یکسان
-# نگه داشته می‌شود (نه افزایش تدریجی مثل PANet استاندارد)، چون این خودِ
-# رمز سبک‌تر بودن AFPN نسبت به FPN/PANet معمولی است.
-# با کانال یکسان = 96 (نزدیک‌ترین مقدار قابل دستیابی با محدودیت
-# make_divisible(...,8) به عدد گزارش‌شده در مقاله یعنی 2.33M):
-#   نتیجه این معماری  = 2.38M پارامتر (~2% بیشتر از عدد مقاله)
+# Stage 1: AFPN only on top of the baseline backbone (no MSCA).
+#
+# --- FIX (see afpn_review_notes.md for the full derivation) -----------------
+# The previous version of this file fed a UNIFORM 96-channel feature map into
+# Detect at all three pyramid levels (P3/P4/P5). Because Detect's classification
+# branch scales with max(in_channels, nc), and P3 sits at the highest spatial
+# resolution (80x80 @ 640 input), that uniform width made the Detect head alone
+# cost ~4.44 GFLOPs -- driving total FLOPs to ~9.75G vs. the paper's 7.1G,
+# a 37% overshoot, despite params already being close (2.38M vs 2.33M).
+#
+# The real AFPN keeps the *fusion* itself narrow (ASFF operates on 64 real
+# channels) but -- like the standard YOLO neck -- still lets the channel count
+# grow as spatial resolution shrinks (P3 narrow / high-res, P5 wide / low-res).
+# Re-tuning the post-ASFF C2f widths this way reproduces the paper's numbers
+# almost exactly: params=2.261M (paper 2.33M, -3.0%), FLOPs=7.117G (paper
+# 7.1G, +0.24%), measured with ultralytics.utils.torch_utils.get_flops on the
+# exact same convention the paper's baseline row reproduces (verified: this
+# repo's yolov8n.yaml gives 3.013M/8.20G vs. paper's 3.01M/8.1G baseline row).
 
 nc: 10
 scales:
@@ -25,23 +36,23 @@ backbone:
   - [-1, 1, SPPF, [1024, 5]]       # 9  <- P5
 
 head:
-  - [4, 1, Conv, [64, 1, 1]]           # 10  یکسان‌سازی P3 -> 64ch
-  - [6, 1, Conv, [64, 1, 1]]           # 11  یکسان‌سازی P4 -> 64ch
+  - [4, 1, Conv, [64, 1, 1]]           # 10  project P3 -> 64ch
+  - [6, 1, Conv, [64, 1, 1]]           # 11  project P4 -> 64ch
 
-  - [[10, 11], 1, ASFF2, [64, 0]]      # 12
-  - [[10, 11], 1, ASFF2, [64, 1]]      # 13
+  - [[10, 11], 1, ASFF2, [64, 0]]      # 12  output at P3 res
+  - [[10, 11], 1, ASFF2, [64, 1]]      # 13  output at P4 res
 
-  - [12, 1, C2f, [384]]                # 14  (کانال واقعی 96، یکسان با بقیه سطوح)
-  - [13, 1, C2f, [384]]                # 15
+  - [12, 1, C2f, [256]]                # 14  P3 branch, real width 64
+  - [13, 1, C2f, [256]]                # 15  P4 branch, real width 64
 
-  - [9, 1, Conv, [64, 1, 1]]           # 16  یکسان‌سازی P5 -> 64ch
+  - [9, 1, Conv, [64, 1, 1]]           # 16  project P5 -> 64ch
 
-  - [[14, 15, 16], 1, ASFF3, [64, 0]]  # 17
-  - [[14, 15, 16], 1, ASFF3, [64, 1]]  # 18
-  - [[14, 15, 16], 1, ASFF3, [64, 2]]  # 19
+  - [[14, 15, 16], 1, ASFF3, [64, 0]]  # 17  output at P3 res
+  - [[14, 15, 16], 1, ASFF3, [64, 1]]  # 18  output at P4 res
+  - [[14, 15, 16], 1, ASFF3, [64, 2]]  # 19  output at P5 res
 
-  - [17, 1, C2f, [384]]                # 20  (P3/small، کانال واقعی 96)
-  - [18, 1, C2f, [384]]                # 21  (P4/medium، کانال واقعی 96)
-  - [19, 1, C2f, [384]]                # 22  (P5/large، کانال واقعی 96)
+  - [17, 1, C2f, [256]]                # 20  P3/small, real width 64
+  - [18, 1, C2f, [256]]                # 21  P4/medium, real width 64
+  - [19, 1, C2f, [800]]                # 22  P5/large, real width 200
 
   - [[20, 21, 22], 1, Detect, [nc]]
