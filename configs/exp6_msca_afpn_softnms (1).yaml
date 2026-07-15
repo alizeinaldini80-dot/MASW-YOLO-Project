@@ -1,0 +1,16 @@
+# configs/exp6_msca_afpn_softnms.yaml
+#
+# ترکیب MSCA + AFPN + Soft-NMS.
+# طبق nms.py: Soft-NMS فقط روی post-processing (حین val/predict) اثر
+# می‌گذارد و هیچ لایه/وزنی به مدل اضافه نمی‌کند؛ بنابراین Params/FLOPs این
+# آزمایش باید دقیقاً برابر exp3_msca_afpn باشد و فقط P/Recall/mAP
+# تغییر کند.
+
+name: exp6_msca_afpn_softnms
+model_yaml: src/models/masw-yolo-afpn.yaml
+weights: yolov8n.pt
+
+soft_nms: true
+soft_nms_method: gaussian    # طبق مقاله: نسخهٔ نهایی از gaussian استفاده می‌کند (Eq. 5)
+soft_nms_sigma: 0.5
+soft_nms_score_thres: 0.001
