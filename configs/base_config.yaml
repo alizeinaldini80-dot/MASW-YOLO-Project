@@ -1,32 +1,31 @@
 # Base Configuration for MASW-YOLO Training
 # Default hyperparameters based on the MASW-YOLO paper.
 
-# Data                                          # <-- اضافه شد
-data: data/dataset.yaml                         # <-- اضافه شد: مسیر فایل تنظیمات دیتاست
+# Data                                          
+data: data/dataset.yaml   
 
 # Training
 epochs: 100
 batch: 16
 imgsz: 640
 workers: 8
-device: 0  # GPU device ID(s)
+device: 0  
 
 # Optimizer
 optimizer: SGD
 lr0: 0.01
-lrf: 0.01  # final learning rate factor
+lrf: 0.01  
 momentum: 0.937
 weight_decay: 0.0005
 
-# Learning rate scheduler
 warmup_epochs: 3.0
 warmup_momentum: 0.8
 warmup_bias_lr: 0.1
 
 # Loss
-box: 7.5       # box loss gain
-cls: 0.5       # cls loss gain
-dfl: 1.5       # dfl loss gain
+box: 7.5     
+cls: 0.5     
+dfl: 1.5     
 
 # Data augmentation
 hsv_h: 0.015
@@ -43,9 +42,9 @@ mosaic: 1.0
 mixup: 0.0
 
 # Model
-model: yolov8n.yaml  # base model configuration
+model: yolov8n.yaml  
 
   
-project: /content/drive/MyDrive/VisDrone_Project/runs/train  # <-- تغییر یافت: روی گوگل درایو
-exist_ok: true                                   # <-- اضافه شد: اگر پوشه تکراری بود بازنویسی کن
-verbose: true                                    # <-- اضافه شد: نمایش جزئیات در حین آموزش
+project: /content/drive/MyDrive/VisDrone_Project/runs/train  
+exist_ok: true                                
+verbose: true                                    
