@@ -1,13 +1,10 @@
 # configs/exp5_wiou.yaml
-#
-# مرحله جداگانه: فقط WIoU-v3 روی baseline (بدون MSCA، بدون AFPN، بدون Soft-NMS).
-# WIoU جایگزین CIoU در محاسبه loss باکس در حین آموزش می‌شود؛ معماری مدل
-# دست‌نخورده باقی می‌ماند (وزن‌های yolov8n.pt به‌عنوان شروع استفاده می‌شود).
+#WIOU
 
 name: exp5_wiou
 weights: yolov8n.pt
 
 wiou: true
-wiou_delta: 3.0        # هایپرپارامتر δ مکانیزم تمرکز غیریکنواخت
-wiou_alpha: 1.9        # هایپرپارامتر α مکانیزم تمرکز غیریکنواخت
-wiou_momentum: 0.9999  # ضریب میانگین متحرک L_IoU برای محاسبه β
+wiou_delta: 3.0        
+wiou_alpha: 1.9        
+wiou_momentum: 0.9999  
