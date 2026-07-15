@@ -1,31 +1,5 @@
-"""
-src/models/modules/afpn.py  (v2 - بازنویسی کامل)
 
-پیاده‌سازی وفادار به شکل ۳ مقاله: Asymptotic Feature Pyramid Network (AFPN).
-
-طبق متن مقاله سه رکن اصلی AFPN عبارت‌اند از:
-    - CB  (Convolutional Block)   -> اینجا از طریق کلاس Conv (=CBS: Conv-BN-SiLU)
-    - BB  (Basic Block)           -> کلاس BasicBlock
-    - ASFF (Adaptive Spatial Feature Fusion) -> کلاس‌های ASFF2 / ASFF3 / ASFF4
-
-و ساختار fusion باید «تدریجی/مجانبی» (asymptotic) باشد، دقیقاً طبق متن:
-    مرحله ۱: C2 و C3 با هم ترکیب می‌شوند (ASFF2)
-    مرحله ۲: نتیجهٔ مرحلهٔ ۱ با C4 ترکیب می‌شود (ASFF3)
-    مرحله ۳: نتیجهٔ مرحلهٔ ۲ با C5 ترکیب می‌شود (ASFF4)
-
-هر مرحله بعد از fusion یک BasicBlock برای پالایش ویژگی (طبق متن: "lightens the
-model and minimizes the number of parameters... perform feature extraction
-more efficiently") دارد.
-
-خروجی نهایی چهار نقشهٔ ویژگی هم‌کانال [P2, P3, P4, P5] است — دقیقاً چهار
-سطحی که در شکل ۳ به "Predict" ختم می‌شوند.
-
-نکته دربارهٔ استفاده در YOLO head: از آنجا که این ماژول یک لیست ۴تایی
-برمی‌گرداند (نه یک تنسور)، یک ماژول کمکی `Index` هم اضافه شده که هر یک از
-چهار خروجی را برای مصرف در لایه‌های بعدی (Concat/C2f/Detect) جدا می‌کند —
-این الگوی رایج در پیاده‌سازی‌های سفارشی ultralytics برای ماژول‌های
-چندخروجی است.
-"""
+#src/models/modules/afpn.py 
 
 import torch
 import torch.nn as nn
@@ -86,19 +60,15 @@ def _resize_to(x, size):
     if x.shape[-2:] == size:
         return x
     if x.shape[-2] > size[0]:
-        # downsample: average pooling (شبیه استاندارد پیاده‌سازی ASFF اصلی)
         return F.adaptive_avg_pool2d(x, size)
-    # upsample
     return F.interpolate(x, size=size, mode="nearest")
 
 
 # --------------------------------------------------------------------------- #
 # ASFF : Adaptive Spatial Feature Fusion  (نسخه‌های ۲، ۳ و ۴ ورودی)
 # --------------------------------------------------------------------------- #
+
 class _ASFFBase(nn.Module):
-    """پایهٔ مشترک ASFFn: هر سطح یک نقشهٔ وزن تک‌کاناله می‌سازد، روی سطوح
-    softmax می‌شود و ترکیب وزن‌دار انجام می‌شود، سپس یک Conv3x3 خروجی را
-    یکپارچه می‌کند."""
 
     def __init__(self, n_levels, c1, level=0):
         super().__init__()
@@ -118,25 +88,17 @@ class _ASFFBase(nn.Module):
 
 
 class ASFF2(_ASFFBase):
-    """fusion دو سطحی — طبق شکل ۳: مرحلهٔ اول، فقط C2 و C3."""
 
     def __init__(self, c0, c1, c_out, level=0):
-        # c0, c1 توسط parsing.py پاس داده می‌شوند اما چون همهٔ ورودی‌ها قبلاً
-        # روی c_out پروجکت شده‌اند (conv های proj در AFPN)، این دو آرگومان
-        # فقط برای سازگاری با امضای parse_model نگه داشته شده‌اند.
         super().__init__(n_levels=2, c1=c_out, level=level)
 
 
 class ASFF3(_ASFFBase):
-    """fusion سه سطحی — طبق شکل ۳: مرحلهٔ دوم، بعد از اضافه‌شدن C4."""
-
     def __init__(self, c0, c1, c2, c_out, level=0):
         super().__init__(n_levels=3, c1=c_out, level=level)
 
 
 class ASFF4(_ASFFBase):
-    """fusion چهار سطحی — طبق شکل ۳: مرحلهٔ سوم/نهایی، بعد از اضافه‌شدن C5."""
-
     def __init__(self, c0, c1, c2, c3, c_out, level=0):
         super().__init__(n_levels=4, c1=c_out, level=level)
 
@@ -145,15 +107,6 @@ class ASFF4(_ASFFBase):
 # AFPN : اورکستریشن کامل fusion تدریجی (شکل ۳)
 # --------------------------------------------------------------------------- #
 class AFPN(nn.Module):
-    """
-    ورودی : لیست ۴ نقشهٔ ویژگی بک‌بون [C2, C3, C4, C5] با کانال‌های دلخواه.
-    خروجی : لیست ۴ نقشهٔ ویژگی هم‌کانال [P2, P3, P4, P5] با عرض `width`.
-
-    Progressive / asymptotic fusion طبق متن مقاله:
-        Stage 1 : C2, C3                     -> ASFF2 -> BasicBlock  (سطح ۲ خروجی)
-        Stage 2 : Stage1_out(2) , C4          -> ASFF3 -> BasicBlock  (سطح ۳ خروجی)
-        Stage 3 : Stage2_out(3) , C5          -> ASFF4 -> BasicBlock  (سطح ۴ خروجی نهایی)
-    """
 
     def __init__(self, width, c2_in, c3_in, c4_in, c5_in):
         super().__init__()
