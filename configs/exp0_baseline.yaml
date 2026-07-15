@@ -1,11 +1,5 @@
 # configs/exp0_baseline.yaml
-#
-# baseline رسمی پروژه.
-# توجه: این آزمایش قبلاً یک‌بار روی نسخه‌ی دانلود خودکار Ultralytics از VisDrone2019
-# اجرا و نتیجه‌گیری شده است. از آنجا که این نسخه و نسخه‌ی موجود در Google Drive پروژه
-# (data/dataset.yaml) از یک منبع رسمی و یکسان هستند، این نتیجه به‌عنوان baseline نهایی
-# پروژه در نظر گرفته می‌شود و نیازی به تکرار train نیست.
-# نتایج ثبت‌شده: mAP@0.5 و mAP@0.5-95 بالاتر از عدد گزارش‌شده در مقاله (30.4% / 17.4%) بود.
+#Yolov8n Baseline
 
 name: yolov8n_visdrone_baseline
 weights: yolov8n.pt
