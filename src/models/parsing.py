@@ -1,18 +1,6 @@
-"""
-src/models/parsing.py
 
-نسخهٔ گسترش‌یافتهٔ parse_model اصلی Ultralytics. این فایل تقریباً عیناً
-همان منطق تابع ultralytics.nn.tasks.parse_model است، با این تفاوت که
-شاخه‌های اضافه برای MSCA، ASFF2، ASFF3، و اکنون AFPN و Index دارد.
-تمام ماژول‌های استاندارد دیگر (Conv, C2f, SPPF, Concat, Detect, و ...)
-دقیقاً همان مسیر اصلی Ultralytics را طی می‌کنند.
+#src/models/parsing.py
 
-⚠️ توجه به نسخه: اگر بعد از آپدیت ultralytics در کولب باز هم خطای
-عجیب گرفتید (مخصوصاً دربارهٔ آرگومان‌های Detect/reg_max/end2end)،
-این دستور را در کولب اجرا کنید و خروجی‌اش را با این فایل مقایسه کنید:
-    import inspect, ultralytics.nn.tasks as t
-    print(inspect.getsource(t.parse_model))
-"""
 
 import ast
 import contextlib
@@ -45,12 +33,6 @@ def uses_custom_multi_input(d: dict) -> bool:
 
 
 def parse_model_with_custom_modules(d: dict, ch, verbose: bool = True):
-    """
-    جایگزین parse_model اصلی، فقط برای yaml هایی که ماژول‌های سفارشی دارند
-    (توسط wrapper در __init__.py قبل از فراخوانی چک می‌شود).
-    برای ماژول‌های غیر سفارشی، همان مسیر ultralytics.nn.tasks.parse_model
-    استفاده می‌شود تا رفتار همیشه با نسخهٔ نصب‌شده هماهنگ بماند.
-    """
     import ultralytics.nn.tasks as ultra_tasks
 
     legacy = True
@@ -72,14 +54,12 @@ def parse_model_with_custom_modules(d: dict, ch, verbose: bool = True):
     for i, (f, n, m_name, args) in enumerate(d["backbone"] + d["head"]):
         args = list(args)
 
-        # --- حل نام ماژول به کلاس واقعی ---
         if isinstance(m_name, str):
             if m_name.startswith("nn."):
                 m = getattr(nn, m_name[3:])
             elif m_name in _CUSTOM_MODULES:
                 m = _CUSTOM_MODULES[m_name]
             else:
-                # هر ماژول استاندارد دیگر Ultralytics (Conv, C2f, SPPF, Detect, ...)
                 m = getattr(ultra_tasks, m_name, None)
                 if m is None:
                     raise ValueError(f"ماژول ناشناخته در yaml: {m_name}")
@@ -93,7 +73,6 @@ def parse_model_with_custom_modules(d: dict, ch, verbose: bool = True):
 
         n = n_ = max(round(n * depth), 1) if n > 1 else n
 
-        # ============== شاخه‌های سفارشی ما ==============
         if m in (ASFF2, ASFF3, ASFF4):
             c_out_raw, level = args[0], (args[1] if len(args) > 1 else 0)
             c_out = make_divisible(min(c_out_raw, max_channels) * width, 8)
@@ -102,25 +81,21 @@ def parse_model_with_custom_modules(d: dict, ch, verbose: bool = True):
             c2 = c_out
 
         elif m is AFPN:
-            # yaml: [[c2_idx, c3_idx, c4_idx, c5_idx], 1, AFPN, [width]]
             width_raw = args[0]
             w = make_divisible(min(width_raw, max_channels) * width, 8)
-            in_channels = [ch[x] for x in f]  # [c2,c3,c4,c5]
+            in_channels = [ch[x] for x in f] 
             args = [w, *in_channels]
-            c2 = w  # هر چهار خروجی (P2..P5) هم‌کانال با عرض w هستند
+            c2 = w 
 
         elif m is Index:
-            # yaml: [afpn_layer_idx, 1, Index, [i]]   i در {0,1,2,3} = P2..P5
             idx = args[0]
             args = [idx]
-            c2 = ch[f]  # کانال بدون تغییر باقی می‌ماند (فقط انتخاب عضو لیست)
-
+            c2 = ch[f] 
         elif m is MSCA:
             c1 = ch[f]
             args = [c1]
             c2 = c1
 
-        # ============== از اینجا به بعد دقیقاً منطق اصلی Ultralytics ==============
         elif m in (Conv, C2f, SPPF):
             c1, c2_ = ch[f], args[0]
             if c2_ != nc:
@@ -139,7 +114,6 @@ def parse_model_with_custom_modules(d: dict, ch, verbose: bool = True):
             c2 = sum(ch[x] for x in f)
 
         elif m is Detect:
-            # طبق نسخهٔ نصب‌شدهٔ فعلی Ultralytics: (nc, reg_max, end2end, ch)
             args.extend([reg_max, end2end, [ch[x] for x in f]])
             m.legacy = legacy
 
